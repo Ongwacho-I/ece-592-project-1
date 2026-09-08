@@ -1,0 +1,151 @@
+# Phase I Cache Capacity Measurement Process
+
+This README summarizes the process used to perform the Phase I
+timing-only cache capacity experiments.
+
+## 1. Compile the pointer-chasing benchmark
+
+First, clone the repository onto the SSH server and enter the project
+directory.
+
+Compile the benchmark using:
+
+gcc -O0 -g -std=c11 -Wall -Wextra -fno-omit-frame-pointer main.c -lm -o cache_bench
+
+
+## 2. Pin the benchmark to one CPU
+
+Use:
+
+lscpu -e=CPU,CORE,SOCKET,NODE
+
+to view the CPU, core, socket, and NUMA-node mapping.
+
+The benchmark should be pinned to one CPU while measurements are running.
+
+For example:
+
+taskset -c 4 ./cache_bench <arguments>
+
+For the Sunbird experiments, CPU 4 was used.
+
+
+## 3. Run a coarse capacity sweep
+
+Start with a large range of power-of-two working-set sizes.
+
+For Sunbird, we tested from 4 KiB through 64 MiB:
+
+taskset -c 4 ./cache_bench sweep 4096 67108864 1000000 64 random 12345 capacity_coarse
+
+The important parameters are:
+
+1000000 = timed samples per working-set size
+64      = dependent pointer accesses per timed sample
+random  = randomized pointer traversal
+12345   = fixed random seed
+
+
+## 4. Plot the coarse sweep and identify possible transitions
+
+Plot the median latency against working-set size and look for regions
+where latency begins to change significantly.
+
+For Sunbird, the coarse sweep showed possible transitions around:
+
+32–64 KiB
+256–512 KiB
+16–32 MiB
+
+These are timing-derived candidate regions and should not yet be treated
+as confirmed cache sizes.
+
+
+## 5. Take dense measurements around the transition regions
+
+After identifying possible transitions, test additional working-set
+sizes within those regions.
+
+For example, for the first Sunbird transition:
+
+for size in 36864 40960 45056 49152 53248 57344 61440
+do
+    taskset -c 4 ./cache_bench single $size 1000000 64 random 12345 dense_$size
+done
+
+Repeat this process for the other transition regions identified from
+the coarse sweep.
+
+
+## 6. Copy the measurement files from the SSH server
+
+From the local Windows machine, use SCP to copy the result files:
+
+scp "<unityID>@<ssh-server>.ece.ncsu.edu:~/<project-directory>/dense_*_summary.csv" .
+
+The period at the end tells SCP to place the files in the current local
+directory.
+
+
+## 7. Generate the main capacity graph
+
+Use the Python plotting program to combine:
+
+capacity_coarse_summary.csv
+dense_*_summary.csv
+
+Plot:
+
+X-axis: Working-set size
+Y-axis: Median latency (TSC ticks/access)
+
+This graph combines the coarse sweep with the dense measurements and
+makes the candidate capacity transitions easier to examine.
+
+
+## 8. Generate box plots around the transitions
+
+The median alone does not show the complete latency distribution.
+
+Use the raw million-sample CSV files to create box plots for
+representative working-set sizes below, near, and above each candidate
+transition.
+
+For Sunbird, three box plots were created corresponding to the three
+main transition regions.
+
+
+## 9. Test randomized vs. sequential traversal
+
+Run sequential traversal at representative working-set sizes to test
+whether regular memory access changes the observed latency behavior.
+
+For example:
+
+taskset -c 4 ./cache_bench single 49152 1000000 64 sequential 12345 prefetch_48k
+
+Repeat at representative points from the other transition regions.
+
+
+## 10. Plot randomized vs. sequential results
+
+Compare the median latency from randomized pointer chasing with the
+sequential measurements.
+
+This comparison helps determine whether regular/sequential traversal is
+being accelerated by mechanisms such as hardware prefetching and helps
+justify using randomized dependent pointer chasing for capacity
+inference.
+
+
+## 11. Record the Phase I timing-only inference
+
+Use the coarse sweep, dense measurements, box plots, and
+randomized-vs-sequential experiment together to identify the
+timing-derived candidate cache-capacity boundaries.
+
+At this stage, do not use PMU counters or known/vendor cache
+specifications to change the timing-only inference.
+
+Save and commit the Phase I results before beginning Phase II
+validation.
